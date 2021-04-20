@@ -1,0 +1,416 @@
+#
+# https://gist.github.com/agurodriguez/1aa5323f49792477983c6f33bfd35f22
+# Author: Agu Rodríguez (agu@torre.co)
+#
+# ⚠️ USAGE INSTRUCTIONS: ⚠️
+#
+# This docker-compose file requires some environment variables to be defined. Create a `.env` with the following content before using it:
+#
+#   DOCKER_DISCOVERY_ENVIRONMENT_TASKS=false
+#   DOCKER_JEDI_USE_KRATOS_DEV=0
+#   ECOSYSTEM_ARDA_URL=https://arda.torre.co
+#   ECOSYSTEM_BIO_URL=http://solar-staging.us-west-2.elasticbeanstalk.com
+#   ECOSYSTEM_DISCOVERY_URL=https://discovery.torre.co
+#   ECOSYSTEM_JEDI_URL=https://search.torre.co
+#   ECOSYSTEM_KRATOS_URL=https://kratos.torre.co
+#   GITHUB_GPR_KEY=<instructions below>
+#   GITHUB_GPR_USER=<instructions below>
+#   GITHUB_OAUTH_TOKEN=<instructions below>
+#
+# -----------------------------------------------------------------------------------------------------------------------------------------
+#
+#   - GITHUB_GPR_KEY and GITHUB_GPR_USER: Used to download the kratos-lib private package when building jedi. You can get one by following:
+#     https://docs.github.com/en/packages/learn-github-packages/about-github-packages#authenticating-to-github-packages
+#
+#   - GITHUB_OAUTH_TOKEN: Used to clone the torre-labs/materrial library when building bio and discovery. You can get one by following: 
+#     https://docs.github.com/en/free-pro-team@latest/github/authenticating-to-github/creating-a-personal-access-token
+#
+# -----------------------------------------------------------------------------------------------------------------------------------------
+#
+# This file was inspired by https://gist.github.com/davidmr/efaed7f52c1de8f6663238d43da1a7c2 created by David Montaño (david@torre.co)
+#
+
+version: "3"
+
+volumes:
+  arda-data:
+  discovery-data:
+  jedi-data:
+  kratos-data:
+  neo4j-data:
+  neo4j-plugins:
+  neo4j-import:
+  solarr-data:
+  tiamat-data:
+  vader-data:
+
+networks:
+  arda:
+  discovery:
+  jedi:
+  kratos:
+  solar:
+  tiamat:
+  torre:
+  vader:
+
+services:
+  arda:
+    image: openjdk:8
+    command: [bash, -c, "./gradlew bootRun --no-daemon --stacktrace"]
+    depends_on:
+      - neo4j-dev
+      - rabbit
+    environment:
+      - spring.profiles.active=dev
+      - ARDA_NEO4J_URI=bolt://neo4j-dev:7687
+      - ARDA_RABBIT_HOST=rabbit
+    networks:
+      - arda
+      - torre
+    ports:
+      - 9182:9182
+    volumes:
+      - ./arda:/app:delegated
+      - ~/.gradle:/root/.gradle:delegated
+      - ~/.m2:/root/.m2:delegated
+    working_dir: /app
+
+  bio:
+    build:
+      context: ./
+      dockerfile: ./bio/deploy/Dockerfile
+    command: >
+      bash -c "
+        ([ -f /app/dist/.torre ] || (
+          cd /app                                                                                                                        &&
+          rm -fr /app/node_modules                                                                                                       &&
+          npm install "git+https://${GITHUB_OAUTH_TOKEN}:x-oauth-basic@github.com/torre-labs/materrial.git"                              &&
+          npm install                                                                                                                    &&
+          mkdir -p /app/dist                                                                                                             &&
+          touch /app/dist/.torre
+        ))                                                                                                                               &&
+        npm run serve
+      "
+    depends_on:
+      - solar
+    environment:
+      - BIO_API_URL=http://solar:7000
+      - VUE_APP_BIO_ENVIRONMENT_MODE=development
+    networks:
+      - torre
+    ports:
+      - 3000:3000
+    volumes:
+      - ./bio:/app:delegated
+
+  discovery:
+    build:
+      context: ./
+      dockerfile: ./discovery/build/Dockerfile
+    command: >
+      bash -c "
+        ([ -f /app/target/.torre ] || (
+          cd /app/ui                                                                                                                     &&
+          rm -fr /app/ui/node_modules                                                                                                    &&
+          npm install "git+https://${GITHUB_OAUTH_TOKEN}:x-oauth-basic@github.com/torre-labs/materrial.git"                              &&
+          npm install                                                                                                                    &&
+          mkdir -p /app/target                                                                                                           &&
+          touch /app/target/.torre                                                                                                       &&
+          cd /app
+        ))                                                                                                                               &&
+        sbt run
+      "
+    depends_on:
+      - discovery-mysql
+      - rabbit
+      - tiamat
+    environment:
+      - BIO_BASE_URL=${ECOSYSTEM_BIO_URL}
+      - DISCOVERY_DB_URL=jdbc:mysql://discovery-mysql:3306/ebdb?useSSL=false&nullNamePatternMatchesAll=true&characterEncoding=UTF-8&useUnicode=true
+      - DISCOVERY_ENVIRONMENT_TASKS=${DOCKER_DISCOVERY_ENVIRONMENT_TASKS:-true}
+      - DISCOVERY_ENVIRONMENT_WEB
+      - DISCOVERY_RABBIT_HOSTS=rabbit
+      - JAVA_OPTS=-Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=2048m
+      - JEDI_BASE_URL=${ECOSYSTEM_JEDI_URL}
+      - KRATOS_BASE_URL=${ECOSYSTEM_KRATOS_URL}
+      - VUE_APP_DISCOVERY_API_URL=/
+      - VUE_APP_DISCOVERY_ARDA_BASE_URL=${ECOSYSTEM_ARDA_URL}
+      - VUE_APP_DISCOVERY_AVAILABLE_LOCALES=en,es
+      - VUE_APP_DISCOVERY_CLOUDINARY_CLOUD_NAME=torre-technologies-co
+      - VUE_APP_DISCOVERY_CLOUDINARY_OPPORTUNITIES_FOLDER=dev/opportunities
+      - VUE_APP_DISCOVERY_CLOUDINARY_OPPORTUNITIES_PRESET=torre.co.opportunities-dev
+      - VUE_APP_DISCOVERY_CLOUDINARY_SCREENING_QUESTIONS_PRESET=torre.co.screening-questions-dev
+      - VUE_APP_DISCOVERY_DEFAULT_LOCALE=en
+      - VUE_APP_DISCOVERY_ENVIRONMENT_MODE=development
+      - VUE_APP_DISCOVERY_GOOGLE_APPLICATION_CLIENT_ID=175066071889-1c2khboanee5h4cktlv01vb3doa57ufp.apps.googleusercontent.com
+      - VUE_APP_DISCOVERY_HOMEPAGES_URL=https://www.torre.co
+      - VUE_APP_DISCOVERY_MESSENGER_CONVERSATIONS_LIMIT=10
+      - VUE_APP_DISCOVERY_SEARCH_BASE_URL=${ECOSYSTEM_JEDI_URL}
+      - VUE_APP_DISCOVERY_STARRGATE_CLIENT_ID=947184
+      - VUE_APP_DISCOVERY_STARRGATE_URL=https://accounts.torre.co
+      - VUE_APP_DISCOVERY_TORRE_ABOUT_BASE_URL=https://www.torre.co/about-torre
+      - VUE_APP_DISCOVERY_TORRE_APP_DOWNLOAD_URL=https://link.connect.torre.co/app/torre-download
+      - VUE_APP_DISCOVERY_TORRE_PROTOCOL_BASE_URL=https://torre.io
+      - VUE_APP_DISCOVERY_UI_BIO_URL=${ECOSYSTEM_BIO_URL}
+      - VUE_APP_DISCOVERY_UI_FIREBASE_API_KEY=AIzaSyDRebMwftviqxAyWLaFVSNvY_KKEjcKG1I
+      - VUE_APP_DISCOVERY_UI_FIREBASE_AUTH_DOMAIN=original-scout-207014.firebaseapp.com
+      - VUE_APP_DISCOVERY_UI_FIREBASE_DB_URL=https://original-scout-207014-2b5c9.firebaseio.com/
+      - VUE_APP_DISCOVERY_UI_FIREBASE_PROJECT_ID=original-scout-207014
+      - VUE_APP_DISCOVERY_UI_SELF_URL=http://localhost:8080
+      - VUE_APP_ROOT_DOMAIN=localhost
+      - VUE_APP_TIAMAT_HOST=http://tiamat:7070
+    networks:
+      - discovery
+      - torre
+    ports:
+      - 8080:8080
+      - 9000:9000
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./discovery:/app:delegated
+      - ./materrial:/app-dependencies/materrial:delegated
+      - ~/.ivy2:/root/.ivy2:delegated
+      - ~/.sbt:/root/.sbt:delegated
+
+  discovery-mysql:
+    image: "mariadb:10.5.8"
+    environment:
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+      - MYSQL_DATABASE=ebdb
+    networks:
+      - discovery
+    ports:
+      - 3306:3306
+    volumes:
+      - discovery-data:/var/lib/mysql
+      - ./discovery/devops/Discovery-Staging-2021_01_11_16_33_51-dump.sql:/docker-entrypoint-initdb.d/initdb.sql
+
+  jedi:
+    image: openjdk:8
+    command: >
+      bash -c "
+        if [ ${DOCKER_JEDI_USE_KRATOS_DEV} = 1 ]; then
+          ./gradlew --no-daemon bootJar && java -Xmx1024m -jar build/libs/app.jar
+        else
+          ./gradlew bootRun --stacktrace
+        fi
+      "
+    depends_on:
+      - jedi-mysql
+      - rabbit
+    environment:
+      - spring.profiles.active=dev
+      - GPR_KEY=${GITHUB_GPR_KEY}
+      - GPR_USER=${GITHUB_GPR_USER}
+      - JEDI_ARDA_URL=${ECOSYSTEM_ARDA_URL}
+      - JEDI_CORS_ALLOWED_ORIGIN=http://localhost:8080
+      - JEDI_DB_PASSWORD=
+      - JEDI_DB_POOL_MIN=2
+      - JEDI_DB_POOL_MAX=4
+      - JEDI_DB_URL=jdbc:mysql://jedi-mysql:3306/ebdb?useSSL=false&characterEncoding=UTF-8&useUnicode=true
+      - JEDI_DB_USERNAME=root
+      - JEDI_GOOGLE_PLACES_API_KEY=AIzaSyDpcTg4gnfxX-LmF_1m2nGbFkveu6LYh-I
+      - JEDI_KRATOS_URL=${ECOSYSTEM_KRATOS_URL}
+      - JEDI_OPENEXCHANGE_APP_ID=59e071f5fae34b1b8b4c7ad6eb293550
+      - JEDI_RABBIT_HOST=rabbit
+      - JEDI_RABBIT_VHOST=t0rre
+      - JEDI_RABBIT_USERNAME=t0rre
+      - JEDI_RABBIT_PASSWORD=t0rre
+      - JEDI_RABBIT_CONCURRENCY=2
+      - JEDI_RABBIT_CONCURRENCY_MAX=4
+      - JEDI_RATE_LIMIT_CAPACITY=100
+      - JEDI_RATE_LIMIT_TIME_SECONDS=10
+    networks:
+      - jedi
+      - torre
+    ports:
+      - 3004:9999
+    volumes:
+      - ./jedi:/app:delegated
+      - ~/.gradle:/root/.gradle:delegated
+      - ~/.kratos:/root/.kratos:delegated
+      - ~/.m2:/root/.m2:delegated
+    working_dir: /app
+
+  jedi-mysql:
+    image: "mysql:5.7"
+    environment:
+      - MYSQL_DATABASE=ebdb
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+    networks:
+      - jedi
+    ports:
+      - 3306:3306
+    volumes:
+      - jedi-data:/var/lib/mysql
+
+  kratos:
+    image: openjdk:8
+    # command: [bash, -c, "./gradlew --no-daemon bootJar && java -Xmx1024m -jar build/libs/app.jar"]
+    command: [bash, -c, "./gradlew bootRun --no-daemon --stacktrace"]
+    depends_on:
+      - kratos-mysql
+    environment:
+      - JAVA_OPTS=-Xmx512m
+      - KRATOS_DB_USERNAME=root
+      - KRATOS_DB_PASSWORD=
+      - KRATOS_DB_POOL_MIN=1
+      - KRATOS_DB_POOL_MAX=4
+      - KRATOS_DB_URL=jdbc:mysql://kratos-mysql:3306/ebdb?useSSL=false&characterEncoding=UTF-8&useUnicode=true
+      - spring.profiles.active=dev
+    networks:
+      - kratos
+      - torre
+    ports:
+      - 5728:5728
+    volumes:
+      - ./kratos:/app:delegated
+      - ~/.gradle:/root/.gradle:delegated
+      - ~/.kratos:/root/.kratos:delegated
+      - ~/.m2:/root/.m2:delegated
+    working_dir: /app
+
+  kratos-mysql:
+    image: "mysql:5.7"
+    networks:
+      - kratos
+    ports:
+      - 3346:3306
+    environment:
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+      - MYSQL_DATABASE=ebdb
+    volumes:
+      - kratos-data:/var/lib/mysql
+
+  neo4j-dev:
+    image: "neo4j:3.5"
+    environment:
+      - NEO4J_AUTH=none
+      - NEO4J_dbms_security_procedures_unrestricted=gds.*
+      - NEO4J_dbms_security_procedures_whitelist=gds.*
+      - NEO4J_dbms_memory_heap_initial__size=3600m
+      - NEO4J_dbms_memory_heap_max__size=3600m
+      - NEO4J_dbms_memory_pagecache_size=2g
+    networks:
+      - arda
+    ports:
+      - 7474:7474
+      - 7687:7687
+    volumes:
+      - ./neo4j-data:/var/lib/neo4j/data
+      - ./neo4j-plugins:/plugins
+      - ./neo4j-import:/var/lib/neo4j/import
+
+  neo4j-test:
+    image: "neo4j:3.5"
+    environment:
+      - NEO4J_AUTH=none
+      - NEO4J_dbms_security_procedures_unrestricted=gds.*
+      - NEO4J_dbms_security_procedures_whitelist=gds.*
+    ports:
+      - 7688:7687
+      - 7475:7474
+    volumes:
+      - ./neo4j-plugins:/plugins
+
+  solar:
+    build:
+      context: ./
+      dockerfile: ./solar/deploy/Dockerfile
+    command: sbt run
+    depends_on:
+      - solar-mysql
+      - rabbit
+    environment:
+      - JAVA_OPTS=-Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=512m
+      - SOLARR_DB_CONNECTION_TIMEOUT=10000
+      - SOLARR_DB_URL=jdbc:mysql://solar-mysql/solarr?useSSL=false&nullNamePatternMatchesAll=true&characterEncoding=UTF-8&useUnicode=true
+      - SOLARR_KRATOS_BASE_URL=${ECOSYSTEM_KRATOS_URL}
+      - SOLARR_RABBIT_HOSTS=rabbit
+    networks:
+      - solar
+      - torre
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./solar:/app:delegated
+      - ~/.ivy2:/root/.ivy2:delegated
+      - ~/.sbt:/root/.sbt:delegated
+
+  solar-mysql:
+    image: "mysql:5.7.23"
+    environment:
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+      - MYSQL_DATABASE=solarr
+    networks:
+      - solar
+    ports:
+      - 3326:3306
+    volumes:
+      - solarr-data:/var/lib/mysql
+
+  rabbit:
+    image: "rabbitmq:3-management"
+    environment:
+      - RABBITMQ_DEFAULT_USER=t0rre
+      - RABBITMQ_DEFAULT_PASS=t0rre
+      - RABBITMQ_DEFAULT_VHOST=t0rre
+    hostname: "rabbit"
+    networks:
+      - torre
+    ports:
+      - 5672:5672
+      - 15672:15672
+
+  tiamat:
+    build:
+      context: ./
+      dockerfile: ./tiamat/build/Dockerfile
+    command: sbt run
+    environment:
+      - JAVA_OPTS=-Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=256m
+    networks:
+      - tiamat
+      - torre
+    ports:
+      - 7070:7070
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./tiamat:/app:delegated
+      - ~/.ivy2:/root/.ivy2:delegated
+      - ~/.sbt:/root/.sbt:delegated
+
+  vader:
+    image: "node:10.15.1"
+    command: >
+      bash -c "
+        ([ -f /app/dist/.torre ] || (
+          cd /app                                                                                                                        &&
+          rm -fr /app/node_modules                                                                                                       &&
+          npm install "git+https://${GITHUB_OAUTH_TOKEN}:x-oauth-basic@github.com/torre-labs/material#Server-side-rendering-library"     &&
+          npm install                                                                                                                    &&
+          mkdir -p /app/dist                                                                                                             &&
+          touch /app/dist/.torre
+        ))                                                                                                                               &&
+        npm run dev
+      "
+    depends_on:
+      - discovery
+    environment:
+      - BIO_BASE_URL=${ECOSYSTEM_BIO_URL}
+      - VUE_APP_DISCOVERY_API_URL=http://discovery:8080
+      - VUE_APP_DISCOVERY_SEARCH_BASE_URL=${ECOSYSTEM_JEDI_URL}
+      - VUE_APP_VADER_DISCOVERY_URL=http://discovery:8080
+      - VUE_APP_VADER_UI_SELF_URL=http://localhost:12000
+      - VUE_APP_VADER_STARRGATE_URL=${ECOSYSTEM_STARRGATE_URL}
+    networks:
+      - torre
+      - vader
+    ports:
+      - 12000:12000
+    volumes:
+      - ./vader:/app:delegated
+    working_dir: /app
